@@ -1,5 +1,8 @@
 # xlsmith
 
+[![crates.io](https://img.shields.io/crates/v/xlsmith.svg)](https://crates.io/crates/xlsmith)
+[![ci](https://github.com/marceanlabs/xlsmith/actions/workflows/ci.yml/badge.svg)](https://github.com/marceanlabs/xlsmith/actions/workflows/ci.yml)
+
 Read a spreadsheet and get the data out as CSV or JSON, without opening Excel.
 
 ```console
@@ -12,16 +15,37 @@ $ xlsmith sheets sales.xlsx
 program with nothing else attached, so it drops into a script, a container or a
 scheduled job without a Python environment to carry along.
 
+## Table of Contents
+
+- [Install](#install)
+- [Usage](#usage)
+- [What it will not do](#what-it-will-not-do)
+- [Performance](#performance)
+- [Using it from Rust](#using-it-from-rust)
+- [Contributing](#contributing)
+- [Licence](#licence)
+
 ## Install
 
 ```console
 $ cargo install xlsmith
 ```
 
-Prebuilt binaries for Linux, macOS and Windows are on the
-[releases page](https://github.com/marceanlabs/xlsmith/releases).
+Building from source needs Rust 1.85 or newer. Prebuilt binaries are on the
+[releases page](https://github.com/marceanlabs/xlsmith/releases):
 
-## Commands
+| Platform | Target |
+|---|---|
+| Linux x86_64 | `x86_64-unknown-linux-gnu`, `x86_64-unknown-linux-musl` |
+| Linux arm64 | `aarch64-unknown-linux-gnu` |
+| macOS, Apple silicon | `aarch64-apple-darwin` |
+| macOS, Intel | `x86_64-apple-darwin` |
+| Windows x86_64 | `x86_64-pc-windows-msvc` |
+
+The musl build is a fully static file, so it runs on any Linux distribution
+whatever its C library.
+
+## Usage
 
 ```console
 $ xlsmith csv report.xlsx --sheet "Q3" --range A2:F500 -o q3.csv
@@ -36,22 +60,15 @@ $ xlsmith csv report.xlsx --sheet "Q3" --range A2:F500 -o q3.csv
 | `--range` | takes one block, as in `A1:D100` |
 | `--delimiter` | comma (the default), tab or semicolon |
 
-## How fast it is
+Output goes to standard output unless you pass `-o`, so it pipes.
 
-200,000 rows and four columns, 4.6 MB, four cores. `scripts/bench.sh` builds the
-workbook and repeats the run.
+### Exit codes
 
-| Tool | Time | Peak memory | Output |
-|---|---|---|---|
-| xlsmith | 0.89 s | 84 MB | 7,103,724 bytes |
-| xlsx2csv (Python) | 9.89 s | 19 MB | 7,103,724 bytes, identical |
-| pandas `read_excel` | 21.20 s | 179 MB | 7,303,724 bytes |
-
-The output is byte for byte what `xlsx2csv` writes, and it arrives about eleven
-times sooner.
-
-The trade is memory. The whole sheet is held in memory at once, so a 500 MB
-workbook needs about 500 MB of RAM, and `xlsx2csv` will win on files that size.
+| Code | Meaning |
+|---|---|
+| 0 | the data was written |
+| 1 | the file could not be read or written |
+| 2 | the sheet or the range does not exist |
 
 ## What it will not do
 
@@ -67,6 +84,14 @@ value in the file, and xlsmith will not invent one.
 Errors come out as Excel writes them (`#DIV/0!`), text stays text, numbers stay
 numbers, and dates come out as `YYYY-MM-DD`.
 
+## Performance
+
+A 200,000 row workbook converts in 0.89 s, and the output is byte for byte what
+`xlsx2csv` writes. The cost is memory: the whole sheet is held at once, so a
+500 MB workbook needs about 500 MB of RAM.
+
+The full table is in [BENCHMARKS.md](BENCHMARKS.md).
+
 ## Using it from Rust
 
 ```rust
@@ -80,8 +105,14 @@ let rows = book.rows(Some("Q3"), None)?;   // Vec<Vec<String>>
 `write_csv` and `write_json` are public, so your own code can print output in the
 same shape as the program.
 
-The test suite reads the same workbook from `.xlsx`, `.xls` and `.ods`, checks
-that all three agree, and compares every value against openpyxl.
+## Contributing
+
+Questions and bug reports go in the [issues](https://github.com/marceanlabs/xlsmith/issues).
+Please open one before writing a patch, since the scope here is narrow on purpose
+and a feature that falls outside it will be turned down whatever its quality.
+
+Security problems should go through [private reporting](https://github.com/marceanlabs/xlsmith/security/advisories/new)
+rather than a public issue.
 
 ## Licence
 
