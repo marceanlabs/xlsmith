@@ -1,41 +1,46 @@
 #!/usr/bin/env python3
-"""Build real fixture workbooks, then check what xlsmith writes against openpyxl.
+"""Check what xlsmith writes against openpyxl, cell by cell.
 
 openpyxl is a different implementation from calamine, so agreement between them
 is evidence about the values rather than a shared assumption. `data_only=True`
-asks openpyxl for the value the file stores, which is the same thing calamine
-gives: a formula is only visible through its last saved result, and a workbook
-written by a program that never calculated has no result to give.
+asks openpyxl for the value the file stores, which is what calamine gives: a
+formula is only visible through its last saved result, and a workbook written by
+a program that never calculated has no result to give.
+
+    python3 scripts/verify_against_openpyxl.py            # check the committed fixtures
+    python3 scripts/verify_against_openpyxl.py --rebuild   # regenerate them first
+    python3 scripts/verify_against_openpyxl.py --quick     # skip the 200,000 row workbook
 """
 import csv as csvmod
 import datetime as dt
 import io
+import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-from openpyxl import Workbook, load_workbook
-
-FIX = Path("/root/work/xlsmith/tests/fixtures")
-FIX.mkdir(parents=True, exist_ok=True)
-BIN = Path("/root/work/xlsmith/target/release/xlsmith")
+ROOT = Path(__file__).resolve().parent.parent
+FIX = ROOT / "tests/fixtures"
+BIN = ROOT / "target/release/xlsmith"
 
 
 def build_simple() -> Path:
+    """Write the small workbook, and the same data as .ods and .xls if LibreOffice is here."""
+    from openpyxl import Workbook
+
     path = FIX / "simple.xlsx"
     wb = Workbook()
     sales = wb.active
     sales.title = "Sales"
     sales.append(["region", "units", "price", "date", "in stock"])
-    rows = [
+    for r in [
         ("North", 12, 9.99, dt.date(2026, 3, 1), True),
         ("South", 0, 4.5, dt.date(2026, 3, 2), False),
         ("East", 1456, 0.01, dt.date(2026, 3, 3), True),
         ("West", 3, 1200.0, dt.date(2026, 3, 4), True),
         ("North", 8, 15.25, dt.date(2026, 3, 5), False),
-    ]
-    for r in rows:
+    ]:
         sales.append(r)
     notes = wb.create_sheet("Notes")
     notes.append(["key", "text"])
@@ -47,10 +52,23 @@ def build_simple() -> Path:
     total["A1"] = "sum"
     total["B1"] = "=SUM(Sales!B2:B6)"
     wb.save(path)
+
+    soffice = shutil.which("soffice") or shutil.which("libreoffice")
+    if soffice:
+        subprocess.run(
+            [soffice, "--headless", "--convert-to", "ods", "--outdir", str(FIX), str(path)],
+            check=False, capture_output=True,
+        )
+        subprocess.run(
+            [soffice, "--headless", "--convert-to", "xls", "--outdir", str(FIX), str(path)],
+            check=False, capture_output=True,
+        )
     return path
 
 
 def build_large(rows: int = 200_000) -> Path:
+    from openpyxl import Workbook
+
     path = FIX / "large.xlsx"
     wb = Workbook(write_only=True)
     ws = wb.create_sheet("Data")
@@ -96,7 +114,8 @@ def trimmed(row: list[str]) -> list[str]:
 
 
 def check_values(path: Path, sheet: str) -> None:
-    """Every cell xlsmith prints must equal what openpyxl reads from the file."""
+    from openpyxl import load_workbook
+
     got = [trimmed(r) for r in csvmod.reader(io.StringIO(xlsmith("csv", str(path), "--sheet", sheet)))]
     ws = load_workbook(path, data_only=True)[sheet]
     expected = [trimmed([rendered(v) for v in row]) for row in ws.iter_rows(values_only=True)]
@@ -109,7 +128,8 @@ def check_values(path: Path, sheet: str) -> None:
                 )
                 sys.exit(1)
         print(
-            f"MISMATCH {path.name}/{sheet}: {len(got)} rows from xlsmith, {len(expected)} from openpyxl",
+            f"MISMATCH {path.name}/{sheet}: {len(got)} rows from xlsmith, "
+            f"{len(expected)} from openpyxl",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -117,23 +137,31 @@ def check_values(path: Path, sheet: str) -> None:
 
 
 def main() -> None:
-    simple = build_simple()
+    if "--rebuild" in sys.argv:
+        FIX.mkdir(parents=True, exist_ok=True)
+        build_simple()
+
     print("values checked against openpyxl:")
     for sheet in ("Sales", "Notes", "Total"):
-        check_values(simple, sheet)
+        check_values(FIX / "simple.xlsx", sheet)
 
     print("sheets command:")
-    print("\n".join("  " + line for line in xlsmith("sheets", str(simple)).splitlines()))
+    print("\n".join("  " + line for line in xlsmith("sheets", str(FIX / "simple.xlsx")).splitlines()))
 
     print("json with header (first lines):")
-    print("\n".join("  " + line for line in xlsmith("json", str(simple), "--header").splitlines()[:5]))
+    print(
+        "\n".join(
+            "  " + line
+            for line in xlsmith("json", str(FIX / "simple.xlsx"), "--header").splitlines()[:5]
+        )
+    )
 
     print("every sheet at once:")
     out_dir = Path("/tmp/xlsmith-sheets")
     out_dir.mkdir(exist_ok=True)
     for old in out_dir.glob("*"):
         old.unlink()
-    xlsmith("csv", str(simple), "--all-sheets", str(out_dir))
+    xlsmith("csv", str(FIX / "simple.xlsx"), "--all-sheets", str(out_dir))
     print("  " + ", ".join(sorted(p.name for p in out_dir.glob("*"))))
 
     if "--quick" in sys.argv:
