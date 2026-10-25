@@ -1,0 +1,23 @@
+name: fuzz
+
+on:
+  schedule:
+    - cron: "27 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  parse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      # Install on stable and invoke with +nightly: a marketplace action left the
+      # subcommand unavailable here before.
+      - run: cargo install cargo-fuzz --locked
+      - run: mkdir -p fuzz/corpus/parse && cp fuzz/seeds/* fuzz/corpus/parse/
+      - run: cargo +nightly fuzz run parse -- -max_total_time=900
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crash
+          path: fuzz/artifacts/parse/
