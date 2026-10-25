@@ -45,6 +45,12 @@ pub enum Error {
         path: PathBuf,
         source: std::io::Error,
     },
+    /// The reader panicked. A file that does this is malformed, and the fault is
+    /// in the dependency, not here: say so rather than dying on a signal.
+    ReaderPanic {
+        path: PathBuf,
+        detail: String,
+    },
 }
 
 impl std::fmt::Display for Error {
@@ -64,6 +70,12 @@ impl std::fmt::Display for Error {
             ),
             Error::BadRange { spec, reason } => write!(f, "range {spec:?}: {reason}"),
             Error::Write { path, source } => write!(f, "{}: {source}", path.display()),
+            Error::ReaderPanic { path, detail } => write!(
+                f,
+                "{}: the spreadsheet reader panicked on this file ({detail}). The file is \
+                 malformed and the fault is in calamine, not in xlsmith",
+                path.display()
+            ),
         }
     }
 }
@@ -199,6 +211,74 @@ fn parse_cell(text: &str, whole: &str) -> Result<(usize, usize)> {
     Ok((row - 1, col - 1))
 }
 
+thread_local! {
+    /// Set while a dependency is parsing, so the panic hook can stay quiet about
+    /// panics this module is going to turn into an ordinary error.
+    static IN_READER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Keep the default panic message for our own bugs, and drop it for the reader's.
+///
+/// Without this a malformed file prints a Rust panic trace and then our error
+/// line, which reads like a crash that happened to carry on.
+pub fn install_panic_hook() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if IN_READER.with(|flag| flag.get()) {
+            return;
+        }
+        default(info);
+    }));
+}
+
+struct QuietReader;
+
+impl QuietReader {
+    fn enter() -> Self {
+        IN_READER.with(|flag| flag.set(true));
+        QuietReader
+    }
+}
+
+impl Drop for QuietReader {
+    fn drop(&mut self) {
+        IN_READER.with(|flag| flag.set(false));
+    }
+}
+
+/// Run a reader call, turning a panic into an error.
+///
+/// A parser is a dependency and a malformed file can make it panic; a command
+/// line tool that dies on a signal has no way to say which file did it, and no
+/// way to keep going with the next one.
+fn guarded<T>(
+    path: &Path,
+    f: impl FnOnce() -> std::result::Result<T, calamine::Error>,
+) -> Result<T> {
+    let _quiet = QuietReader::enter();
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(source)) => Err(Error::Read {
+            path: path.to_path_buf(),
+            source,
+        }),
+        Err(payload) => Err(Error::ReaderPanic {
+            path: path.to_path_buf(),
+            detail: panic_message(&payload),
+        }),
+    }
+}
+
+fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(text) = payload.downcast_ref::<&str>() {
+        (*text).to_string()
+    } else if let Some(text) = payload.downcast_ref::<String>() {
+        text.clone()
+    } else {
+        "no message".to_string()
+    }
+}
+
 /// An open workbook. Held once and read from many times, because parsing the
 /// file is the expensive part and every sheet is already inside it.
 pub struct Book {
@@ -210,10 +290,7 @@ pub struct Book {
 impl Book {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
-        let inner = calamine::open_workbook_auto(&path).map_err(|source| Error::Read {
-            path: path.clone(),
-            source,
-        })?;
+        let inner = guarded(&path, || calamine::open_workbook_auto(&path))?;
         let names = inner.sheet_names().to_vec();
         Ok(Book { path, inner, names })
     }
@@ -231,13 +308,7 @@ impl Book {
         let names = self.names.clone();
         let mut out = Vec::with_capacity(names.len());
         for name in names {
-            let range = self
-                .inner
-                .worksheet_range(&name)
-                .map_err(|source| Error::Read {
-                    path: self.path.clone(),
-                    source,
-                })?;
+            let range = guarded(&self.path, || self.inner.worksheet_range(&name))?;
             let (rows, cols) = range.get_size();
             out.push(SheetInfo { name, rows, cols });
         }
@@ -283,13 +354,7 @@ impl Book {
         range: Option<CellRange>,
     ) -> Result<Vec<Vec<String>>> {
         let name = self.resolve(sheet)?;
-        let cells = self
-            .inner
-            .worksheet_range(&name)
-            .map_err(|source| Error::Read {
-                path: self.path.clone(),
-                source,
-            })?;
+        let cells = guarded(&self.path, || self.inner.worksheet_range(&name))?;
         let (height, width) = cells.get_size();
         let mut out = Vec::new();
         for (row_idx, row) in cells.rows().enumerate() {

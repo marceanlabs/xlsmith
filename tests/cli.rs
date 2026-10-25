@@ -211,6 +211,28 @@ fn a_file_that_is_not_a_spreadsheet_exits_1() {
 }
 
 #[test]
+fn a_file_that_makes_the_reader_panic_exits_1_without_a_trace() {
+    // Found by the fuzz target: a truncated .xls whose compound-file header
+    // claims a directory entry longer than the file holds.
+    let r = run(&["csv", fixture("broken.xls").to_str().unwrap()]);
+    assert_eq!(
+        r.code, 1,
+        "a malformed file is a failure, not a signal: {}",
+        r.err
+    );
+    assert!(r.err.contains("panicked on this file"), "{}", r.err);
+    assert!(
+        !r.err.contains("panicked at"),
+        "the panic trace must not reach the user: {}",
+        r.err
+    );
+    assert!(
+        r.out.is_empty(),
+        "nothing may be written for a file that failed"
+    );
+}
+
+#[test]
 fn tab_delimiter_replaces_the_separator() {
     let r = run(&[
         "csv",

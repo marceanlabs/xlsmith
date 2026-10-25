@@ -89,6 +89,7 @@ impl Delimiter {
 }
 
 fn main() -> ExitCode {
+    xlsmith::install_panic_hook();
     let cli = Cli::parse();
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
