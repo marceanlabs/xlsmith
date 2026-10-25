@@ -1,0 +1,107 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            archive: tar.gz
+            musl: true
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-14
+            archive: tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-14
+            archive: tar.gz
+            cross: true
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl tools
+        if: matrix.musl
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      # A green build is not a working binary: read the committed workbook and
+      # check a value comes out, on the platform the asset was built for.
+      - name: Smoke test (unix)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="target/${{ matrix.target }}/release/xlsmith"
+          "$BIN" --version
+          "$BIN" csv tests/fixtures/simple.xlsx --sheet Sales > out.csv
+          head -2 out.csv
+          grep -q 'North,12,9.99,2026-03-01,true' out.csv
+          "$BIN" sheets tests/fixtures/simple.ods
+
+      - name: Smoke test (windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $bin = "target/${{ matrix.target }}/release/xlsmith.exe"
+          & $bin --version
+          & $bin csv tests/fixtures/simple.xlsx --sheet Sales | Out-File -Encoding utf8 out.csv
+          Get-Content out.csv -TotalCount 2
+          if (-not (Select-String -Path out.csv -Pattern 'North,12,9.99')) { throw "no rows came out" }
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            NAME="xlsmith-${VERSION}-${{ matrix.target }}.zip"
+            (cd "target/${{ matrix.target }}/release" && 7z a "$OLDPWD/$NAME" xlsmith.exe >/dev/null)
+          else
+            NAME="xlsmith-${VERSION}-${{ matrix.target }}.tar.gz"
+            tar -czf "$NAME" -C "target/${{ matrix.target }}/release" xlsmith
+          fi
+          echo "ASSET=$NAME" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ env.ASSET }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

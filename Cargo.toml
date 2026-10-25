@@ -1,0 +1,24 @@
+[package]
+name = "xlsmith"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Read spreadsheets and write them as CSV or JSON, from one binary"
+license = "Apache-2.0"
+repository = "https://github.com/marceanlabs/xlsmith"
+homepage = "https://github.com/marceanlabs/xlsmith"
+readme = "README.md"
+keywords = ["xlsx", "csv", "spreadsheet", "excel", "cli"]
+categories = ["command-line-utilities", "parsing"]
+
+[dependencies]
+calamine = { version = "0.37.0", features = ["dates"] }
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+clap = { version = "4.6.7", features = ["derive"] }
+csv = "1.4.0"
+rayon = "1.12.0"
+serde_json = "1.0.154"
+
+[profile.release]
+lto = true
+codegen-units = 1
