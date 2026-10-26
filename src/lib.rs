@@ -15,6 +15,7 @@ pub use calamine;
 
 /// One sheet, as the workbook describes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SheetInfo {
     pub name: String,
     pub rows: usize,
@@ -23,6 +24,7 @@ pub struct SheetInfo {
 
 /// Anything that can go wrong, with the file named.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     Io {
         path: PathBuf,
@@ -98,6 +100,7 @@ type Result<T> = std::result::Result<T, Error>;
 
 /// A range of cells, addressed the way a spreadsheet addresses them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct CellRange {
     pub start_row: usize,
     pub start_col: usize,
@@ -295,10 +298,12 @@ impl Book {
         Ok(Book { path, inner, names })
     }
 
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
 
+    #[must_use]
     pub fn names(&self) -> &[String] {
         &self.names
     }
@@ -385,6 +390,7 @@ impl Book {
 
 /// How a cell is written out. Numbers keep the shape a person typed; dates
 /// become ISO text so a CSV is readable without a spreadsheet.
+#[must_use]
 pub fn text(cell: &Data) -> String {
     match cell {
         Data::Empty => String::new(),
@@ -515,6 +521,7 @@ pub fn sink(path: Option<&Path>) -> std::io::Result<Box<dyn Write>> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, reason = "tests may panic on a failed assertion")]
     use super::*;
 
     #[test]
